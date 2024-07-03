@@ -1,0 +1,8 @@
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: 'php-app'
+        static_configs:
+          - targets: ['yotkt.com:80']
+        metrics_path: /metrics
+        scheme: http

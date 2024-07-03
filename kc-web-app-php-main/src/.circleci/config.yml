@@ -1,0 +1,344 @@
+version: 2.1
+
+defaults: &defaults
+  working_directory: ~/workspace
+  docker:
+    - image: cimg/php:8.3.4
+
+
+########## ORBS
+# orbs:
+#   sonarcloud: sonarsource/sonarcloud@2.0.0
+
+
+########## COMMANDS
+commands:
+  set_xdebug_coverage:
+    description: "Configurar Xdebug para cobertura"
+    steps:
+      - run:
+          name: Configurar Xdebug para cobertura
+          command: echo 'export XDEBUG_MODE=coverage' >> $BASH_ENV
+
+
+########## JOBS
+jobs:
+
+  scan-git-guardian:
+    <<: *defaults
+    steps:
+      - checkout
+
+      - setup_remote_docker
+
+      - run:
+          name: Instalo GitGuardian CLI
+          command: |
+
+            sudo curl -1sLf \
+              'https://dl.cloudsmith.io/public/gitguardian/ggshield/setup.deb.sh' \
+              | sudo -E bash
+            sudo apt-get -y update && sudo apt-get -y install ggshield
+
+      - run:
+          name: Login en Git Guardian
+          command: |
+
+            echo $GG_TOKEN | ggshield auth login --method token
+
+      - run:
+          name: Escaneo del repo (firewallforce/kc-web-app-php)
+          command: |
+
+            ggshield secret scan repo https://github.com/FirewallForce/kc-web-app-php.git
+
+      - run:
+          name: Escaneo del repo (firewallforce/kc-helm-chart-app)
+          command: |
+
+            ggshield secret scan repo https://github.com/FirewallForce/kc-helm-chart-app.git
+
+
+  ejecutando-linter:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - run:
+          name: Instalamos PHP_CodeSniffer
+          command: |
+
+            sudo apt-get -y update
+            sudo apt-get -y install php-codesniffer
+
+      - run:
+          name: Escaneamos estaticamente el código con PHP_CodeSniffer
+          command: |
+
+            # Root path a escanear
+            PATH_TO_SCAN=~/workspace/src
+            
+            # Escaneo
+            phpcs --standard=PSR12 $PATH_TO_SCAN/index.php
+
+      # - sonarcloud/scan
+
+
+  ejecutando-tests-unitarios:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - set_xdebug_coverage
+
+      - run:
+          name: Instalar PHPUnit
+          command: |
+
+            cd ~
+            sudo apt-get -y update
+            sudo apt-get -y install software-properties-common 
+            sudo add-apt-repository -y ppa:ondrej/php
+            sudo apt-get -y update
+            sudo apt-get -y install php8.2 php8.2-cli php8.2-ctype php8.2-dom php8.2-dev \
+              php8.2-mbstring php8.2-tokenizer php8.2-xml php8.2-xmlwriter php-pear
+
+            wget https://phar.phpunit.de/phpunit.phar
+            chmod +x phpunit.phar
+            sudo mv phpunit.phar /usr/local/bin/phpunit
+
+            sudo mkdir /usr/local/bin/.phpunit.result.cache
+            sudo chmod 777 /usr/local/bin/.phpunit.result.cache
+
+            sudo pecl channel-update pecl.php.net
+            sudo pecl install xdebug
+            echo "zend_extension=$(find /usr/lib/php/ -name xdebug.so)" | sudo tee -a /etc/php/8.2/cli/php.ini
+
+      - run:
+          name: Ejecutar pruebas unitarias con PHPUnit
+          command: |
+
+            phpunit --coverage-clover=coverage.xml --coverage-filter=src/tests --coverage-html=coverage-report src/tests
+
+      - store_artifacts:
+          name: Se guarda artifact - coverage.xml
+          path: coverage.xml
+
+      - store_artifacts:
+          name: Se guarda artifact de informe HTML de covertura
+          path: coverage-report
+
+      # - sonarcloud/scan
+
+      
+  actualizando-app:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    
+    steps:
+      # Siempre se descarga antes el repo que ya hemos  
+      # actualizado cuando hicimos el push del pipeline
+      - checkout
+
+      # Clonar la aplicación base desde GitHub
+      - run:
+          name: Clonar aplicación base desde GitHub
+          command: git clone https://github.com/FirewallForce/kc-web-app-php.git base-app
+          
+      - run:
+          name: Configuro GIT
+          command: |
+
+            git config --global user.name "Firewall Force"
+            git config --global user.email "firewallforce@gmail.com"
+            git config --global color.ui true
+            git config --global alias.st "status -s -b"
+            git config --global alias.lg "log --oneline --all --decorate --graph"
+            git config --global alias.br "branch"
+            git config --global alias.ch "checkout"
+      
+      - run:
+          name: Actualizo archivos de la app
+          command: |
+
+            cp -rp .circleci base-app/src/
+            cp -rp src/index.php base-app/src/index.php
+
+      - run:
+          name: Realizo el push de la app actualizada
+          command: |
+
+            cd base-app
+            git add .
+            git commit -m "Actualizacion desde CIRCLECI - $(date +'%Y-%m-%d %H:%M:%S')"
+            git push https://$GH_TOKEN@github.com/$GH_USER/kc-web-app-php main
+            # git push https://$GH_TOKEN@github.com/$GH_USER/kc-web-app-php main --tags
+
+      - persist_to_workspace:
+          root: ~/workspace
+          paths:
+            - GIT_VERSION
+
+
+  actualizando-despliegue-helm-chart-argocd:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    
+    steps:
+
+      - checkout
+
+
+  construyendo-publicando-imagen-dockerhub:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      
+      - checkout
+
+
+  desplegando-app-argocd:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+
+      - checkout
+
+
+  desplegando-pro:
+    <<: *defaults
+    steps:
+
+      - checkout
+
+      # Clonar la aplicación base desde GitHub
+      - run:
+          name: Clonar aplicación base desde GitHub
+          command: git clone https://github.com/FirewallForce/kc-web-app-php.git base-app
+          
+      - run:
+          name: Configuro GIT
+          command: |
+
+            git config --global user.name "Firewall Force"
+            git config --global user.email "firewallforce@gmail.com"
+            git config --global color.ui true
+            git config --global alias.st "status -s -b"
+            git config --global alias.lg "log --oneline --all --decorate --graph"
+            git config --global alias.br "branch"
+            git config --global alias.ch "checkout"
+
+      - run:
+          name: Obtener y aumentar versión del repositorio clonado
+          command: |
+
+            cd base-app
+          
+            # Obtener la versión actual del repositorio clonado
+            CURRENT_GIT_VERSION=$(git describe --abbrev=0 --tags)
+
+            # Dividir la versión en partes
+            major=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f1)
+            minor=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f2)
+            patch=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f3)
+
+            # Incrementar el número de versión
+            patch=$((patch+1))
+
+            # Construir el nuevo número de versión (por ejemplo, de 1.0.17 a 1.0.18)
+            GIT_REPO_VERSION="${major}.${minor}.${patch}"
+
+            # Aplicar el nuevo tag en el repositorio clonado al commit actual
+            git tag "$GIT_REPO_VERSION"
+
+            # Crear archivo GIT_VERSION con la variable GIT_REPO_VERSION
+            echo $GIT_REPO_VERSION > ~/workspace/GIT_VERSION
+      
+      - run:
+          name: Realizo el push de la app actualizada
+          command: |
+
+            cd base-app
+            git push https://$GH_TOKEN@github.com/$GH_USER/kc-web-app-php main --tags
+
+      
+########## WORKFLOWS
+workflows:
+  firewall-force-workflow:
+    jobs:
+
+      - scan-git-guardian:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+
+      - ejecutando-linter:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - scan-git-guardian
+
+      - ejecutando-tests-unitarios:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - ejecutando-linter
+
+      - actualizando-app:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - ejecutando-tests-unitarios
+
+      - actualizando-despliegue-helm-chart-argocd:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - actualizando-app
+
+      - construyendo-publicando-imagen-dockerhub:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - actualizando-despliegue-helm-chart-argocd
+
+      - desplegando-app-argocd:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - construyendo-publicando-imagen-dockerhub
+
+      - desplegando-pro:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - main

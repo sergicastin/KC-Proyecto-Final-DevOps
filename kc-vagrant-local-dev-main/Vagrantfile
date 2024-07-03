@@ -1,0 +1,37 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+
+  ######### VM1 ##########
+  config.vm.define "vm1" do |vm1|
+
+    ## BASE
+    vm1.vm.box = "jhoncytech/kc-firewall-force"
+    vm1.vm.box_version = "1.0.0"
+    vm1.vm.box_check_update = false
+    vm1.vm.hostname = "vm-01"
+
+    ## PORTS
+    vm1.vm.network "forwarded_port", guest: 80, host: 8040    # WEB
+    vm1.vm.network "forwarded_port", guest: 8070, host: 8070  # ArgoCD
+    vm1.vm.network "forwarded_port", guest: 9090, host: 9090  # prometheus-operated
+    vm1.vm.network "forwarded_port", guest: 9093, host: 9093  # alertmanager-operated
+    vm1.vm.network "forwarded_port", guest: 3000, host: 3000  # prometheus-grafana
+    vm1.vm.network "forwarded_port", guest: 3100, host: 3100  # Argo rollout dashboard
+    vm1.vm.network "forwarded_port", guest: 22, host: 2233, id: "ssh" # SSH
+
+    ## NETWORK
+    vm1.vm.network "private_network", ip: "192.168.10.2", nic_type: "virtio", virtualbox__intnet: "keepcoding"
+
+    ## VB
+    vm1.vm.provider "virtualbox" do |vb|
+      vb.name = "kc-vm-01"
+      vb.memory = "1024"
+      vb.cpus = "1"
+      vb.default_nic_type = "virtio"
+    end
+
+  end 
+
+end

@@ -1,0 +1,500 @@
+version: 2.1
+
+defaults: &defaults
+  working_directory: ~/workspace
+  docker:
+    - image: cimg/php:8.3.4
+
+
+########## ORBS
+# orbs:
+#   sonarcloud: sonarsource/sonarcloud@2.0.0
+
+
+########## COMMANDS
+commands:
+  set_xdebug_coverage:
+    description: "Configurar Xdebug para cobertura"
+    steps:
+      - run:
+          name: Configurar Xdebug para cobertura
+          command: echo 'export XDEBUG_MODE=coverage' >> $BASH_ENV
+
+
+
+########## JOBS
+jobs:
+
+  scan-git-guardian:
+    <<: *defaults
+    steps:
+      - checkout
+
+      - setup_remote_docker
+
+      - run:
+          name: Instalo GitGuardian CLI
+          command: |
+
+            sudo curl -1sLf \
+              'https://dl.cloudsmith.io/public/gitguardian/ggshield/setup.deb.sh' \
+              | sudo -E bash
+            sudo apt-get -y update && sudo apt-get -y install ggshield
+
+      - run:
+          name: Login en Git Guardian
+          command: |
+
+            echo $GG_TOKEN | ggshield auth login --method token
+
+      - run:
+          name: Escaneo del repo (firewallforce/kc-web-app-php)
+          command: |
+
+            ggshield secret scan repo https://github.com/FirewallForce/kc-web-app-php.git
+
+      - run:
+          name: Escaneo del repo (firewallforce/kc-helm-chart-app)
+          command: |
+
+            ggshield secret scan repo https://github.com/FirewallForce/kc-helm-chart-app.git
+
+
+
+  ejecutando-linter:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - run:
+          name: Instalamos PHP_CodeSniffer
+          command: |
+
+            sudo apt-get -y update
+            sudo apt-get -y install php-codesniffer
+
+      - run:
+          name: Escaneamos estaticamente el código con PHP_CodeSniffer
+          command: |
+
+            # Root path a escanear
+            PATH_TO_SCAN=~/workspace/src
+
+            # Escaneo
+            phpcs --standard=PSR12 $PATH_TO_SCAN/index.php
+
+      # - sonarcloud/scan
+
+
+
+  ejecutando-tests-unitarios:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - set_xdebug_coverage
+
+      - run:
+          name: Instalar PHPUnit
+          command: |
+
+            cd ~
+            sudo apt-get -y update
+            sudo apt-get -y install software-properties-common
+            sudo add-apt-repository -y ppa:ondrej/php
+            sudo apt-get -y update
+            sudo apt-get -y install php8.2 php8.2-cli php8.2-ctype php8.2-dom php8.2-dev \
+              php8.2-mbstring php8.2-tokenizer php8.2-xml php8.2-xmlwriter php-pear
+
+            wget https://phar.phpunit.de/phpunit.phar
+            chmod +x phpunit.phar
+            sudo mv phpunit.phar /usr/local/bin/phpunit
+
+            sudo mkdir /usr/local/bin/.phpunit.result.cache
+            sudo chmod 777 /usr/local/bin/.phpunit.result.cache
+
+            sudo pecl channel-update pecl.php.net
+            sudo pecl install xdebug
+            echo "zend_extension=$(find /usr/lib/php/ -name xdebug.so)" | sudo tee -a /etc/php/8.2/cli/php.ini
+
+      - run:
+          name: Ejecutar pruebas unitarias con PHPUnit
+          command: |
+
+            phpunit --coverage-clover=coverage.xml --coverage-filter=src/tests --coverage-html=coverage-report src/tests
+
+      - store_artifacts:
+          name: Se guarda artifact - coverage.xml
+          path: coverage.xml
+
+      - store_artifacts:
+          name: Se guarda artifact de informe HTML de covertura
+          path: coverage-report
+
+      # - sonarcloud/scan
+
+
+
+  actualizando-helm-chart:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+
+    steps:
+      - checkout
+
+      - attach_workspace:
+          at: ~/workspace
+
+      # Clonar repo kc-helm-chart desde GitHub
+      - run:
+          name: Clonar repo kc-helm-chart desde GitHub
+          command: git clone https://github.com/firewallforce/kc-helm-chart-app.git kc-helm-chart
+
+      - run:
+          name: Configuro GIT
+          command: |
+
+            git config --global user.name "Firewall Force"
+            git config --global user.email "firewallforce@gmail.com"
+            git config --global color.ui true
+            git config --global alias.st "status -s -b"
+            git config --global alias.lg "log --oneline --all --decorate --graph"
+            git config --global alias.br "branch"
+            git config --global alias.ch "checkout"
+
+      - run:
+          name: Obtener y aumentar versión del repositorio clonado
+          command: |
+
+            cd kc-helm-chart
+
+            # Obtener la versión actual del repositorio clonado
+            CURRENT_GIT_VERSION=$(git describe --abbrev=0 --tags)
+
+            # Dividir la versión en partes
+            major=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f1)
+            minor=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f2)
+            patch=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f3)
+
+            # Incrementar el número de versión
+            patch=$((patch+1))
+
+            # Construir el nuevo número de versión (por ejemplo, de 1.0.17 a 1.0.18)
+            GIT_REPO_VERSION="${major}.${minor}.${patch}"
+
+            # Aplicar el nuevo tag en el repositorio clonado al commit actual
+            git tag "$GIT_REPO_VERSION"
+
+            # Crear archivo GIT_VERSION con la variable GIT_REPO_VERSION
+            echo $GIT_REPO_VERSION > ~/workspace/GIT_VERSION
+
+      - run:
+          name: Actualizo el deployment.yaml
+          command: |
+
+            # Obtengo el tag del repo
+            cat ~/workspace/GIT_VERSION
+            DOCKER_VERSION=$(cat ~/workspace/GIT_VERSION)
+
+            # Actualizo la imagen en el deployment
+            sed -i "s|^ *image:.*|        image: jhoncytech/kc-final-project-app:$DOCKER_VERSION|g" kc-helm-chart/kc-chart/templates/02-app-rollout.yaml
+
+      - run:
+          name: Realizo el push de la app actualizada asi como hago push del tag
+          command: |
+
+            # Obtengo el tag del repo
+            cat ~/workspace/GIT_VERSION
+            DOCKER_VERSION=$(cat ~/workspace/GIT_VERSION)
+
+            # Realizo los push
+            cd kc-helm-chart
+            git add .
+            git commit -m "Actualizacion desde CIRCLECI - $(date +'%Y-%m-%d %H:%M:%S')"
+            git push https://$GH_TOKEN@github.com/$GH_USER/kc-helm-chart-app.git main
+            git push https://$GH_TOKEN@github.com/$GH_USER/kc-helm-chart-app.git main --tags
+
+      - persist_to_workspace:
+          root: ~/workspace
+          paths:
+            - GIT_VERSION
+
+
+
+  construyendo-publicando-imagen-dockerhub:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - setup_remote_docker
+
+      - attach_workspace:
+          at: ~/workspace
+
+      - run:
+          name: Verificar Docker
+          command: docker version || true
+
+      - run:
+          name: Confirmar Verificación
+          command: echo "La verificación de Docker se completó correctamente."
+
+      - run:
+          name: Iniciar sesión en Docker Hub
+          command: echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+
+      - run:
+          name: Compilamos y publicando la imagen
+          command: |
+
+            # Instalamos la base
+            sudo apt-get -y update
+            sudo apt-get -y install libapache2-mod-php php php-cli tree
+
+            # Instalamos composer
+            # php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+            # php -r "if (hash_file('sha384', 'composer-setup.php') === 'dac665fdc30fdd8ec78b38b9800061b4150413ff2e3b6f88543c636f7cd84f6db9189d43a81e5503cda447da73c7e5b6') { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;"
+            # php composer-setup.php
+            # php -r "unlink('composer-setup.php');"
+            # sudo mv composer.phar /usr/local/bin/composer
+
+            # Descargamos el paquete de la app
+            # composer require firewallforce/kc-web-app-php
+            sudo git clone https://$GH_TOKEN@github.com/$GH_USER/kc-web-app-php.git para-compilar
+
+            # Actualizamos el index.php
+            sudo rm -rf ~/workspace/para-compilar/src/index.php
+            sudo mv ~/workspace/src/index.php ~/workspace/para-compilar/src/
+
+            # Creamos la variable DOCKER_VERSION desde GIT_VERSION
+            DOCKER_VERSION=$(cat ~/workspace/GIT_VERSION)
+
+            # Construyo la imagen
+            cd ~/workspace/para-compilar/src
+            docker build --no-cache -t jhoncytech/kc-final-project-app:$DOCKER_VERSION .
+
+            # Publico la imagen
+            docker push jhoncytech/kc-final-project-app:$DOCKER_VERSION
+
+
+
+  desplegando-app-en-cluster-pre:
+    <<: *defaults
+    docker:
+      - image: cimg/base:2024.02
+    steps:
+      - checkout
+
+      - run:
+          name: Instalacion de doctl - Cli de Digital Ocean
+          command: |
+            cd ~ && wget https://github.com/digitalocean/doctl/releases/download/v1.104.0/doctl-1.104.0-linux-amd64.tar.gz
+            tar xf ~/doctl-1.104.0-linux-amd64.tar.gz
+            sudo mv ~/doctl /usr/local/bin
+            doctl version
+
+      - run:
+          name: Instalacion de Kubectl
+          command: |
+            sudo curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            sudo curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
+            echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+      - run:
+          name: Instalación de Argo Rollouts CLI
+          command: |
+            sudo curl -sSL -o /usr/local/bin/kubectl-argo-rollouts https://github.com/argoproj/argo-rollouts/releases/download/v1.2.0/kubectl-argo-rollouts-linux-amd64
+            sudo chmod +x /usr/local/bin/kubectl-argo-rollouts
+            kubectl-argo-rollouts version
+
+      - run:
+          name: Clonar repo kc-helm-chart desde GitHub
+          command: git clone https://github.com/firewallforce/kc-helm-chart-app.git kc-helm-chart
+
+      - run:
+          name: Sincronizando App
+          command: |
+
+            # Auth
+            doctl auth init -t $DO_TOKEN
+            doctl kubernetes cluster kubeconfig save jhonnygo-kc-cluster
+            kubectl config get-contexts
+
+            # Access
+            cd kc-helm-chart/kc-chart/templates
+
+            # Dashboard
+            nohup kubectl-argo-rollouts dashboard &
+            sleep 5
+
+            # Apply rollout
+            kubectl apply -f 02-app-rollout.yaml
+
+
+
+  desplegando-app-en-vm-pro:
+    <<: *defaults
+    steps:
+
+      - checkout
+
+      - attach_workspace:
+          at: ~/workspace
+
+      # Clonar el repo kc-helm-chart-app desde GitHub
+      - run:
+          name: Clonar repo kc-helm-chart-app desde GitHub
+          command: git clone https://github.com/FirewallForce/kc-helm-chart-app.git kc-helm-chart-app
+
+      - run:
+          name: Configuro GIT
+          command: |
+
+            git config --global user.name "Firewall Force"
+            git config --global user.email "firewallforce@gmail.com"
+            git config --global color.ui true
+            git config --global alias.st "status -s -b"
+            git config --global alias.lg "log --oneline --all --decorate --graph"
+            git config --global alias.br "branch"
+            git config --global alias.ch "checkout"
+
+      - run:
+          name: Obtener la version de kc-helm-chart-app
+          command: |
+
+            cd kc-helm-chart-app
+
+            # Obtener la versión actual del repositorio clonado
+            CURRENT_GIT_VERSION=$(git describe --abbrev=0 --tags)
+
+            # Dividir la versión en partes
+            major=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f1)
+            minor=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f2)
+            patch=$(echo "$CURRENT_GIT_VERSION" | cut -d. -f3)
+
+            # Incrementar el número de versión
+            # patch=$((patch+1))
+
+            # Construir el nuevo número de versión (por ejemplo, de 1.0.17 a 1.0.18)
+            GIT_REPO_VERSION="${major}.${minor}.${patch}"
+
+            # Crear archivo GIT_VERSION con la variable GIT_REPO_VERSION
+            echo $GIT_REPO_VERSION > ~/workspace/GIT_VERSION
+
+      - run:
+          name: Clonar aplicación base para tagearla con la version de kc-helm-chart-app
+          command: |
+            git clone https://github.com/FirewallForce/kc-web-app-php.git base-app
+
+            # Obtengo el tag del repo
+            cat ~/workspace/GIT_VERSION
+            APP_VERSION=$(cat ~/workspace/GIT_VERSION)
+
+            # Aplicar el nuevo tag en el repositorio clonado al commit actual
+            cd base-app
+            git tag "$APP_VERSION"
+            git push https://$GH_TOKEN@github.com/$GH_USER/kc-web-app-php.git main --tags
+
+      - run:
+          name: Install AWS CLI
+          command: |
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+
+      - run:
+          name: Get AWS Secret
+          command: |
+            sudo apt-get -y update
+            sudo apt-get -y install jq
+            aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+            aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+            secret_value=$(aws secretsmanager get-secret-value --secret-id firewall_force_ssh_key_01 --region eu-west-1 --output text --query SecretString)
+            echo "$secret_value" | jq -r '.["key"]' > aws_tmp_ssh_key
+            base64 --decode aws_tmp_ssh_key > aws_ssh_key
+            chmod 600 aws_ssh_key
+
+      - run:
+          name: Add AWS host to known_hosts
+          command: |
+            mkdir -p ~/.ssh
+            ssh-keyscan -H 34.255.109.246 >> ~/.ssh/known_hosts
+
+      - run:
+          name: Actualizar la aplicación en la máquina de AWS
+          command: ssh -i aws_ssh_key ubuntu@34.255.109.246 '/usr/local/bin/update-app'
+
+
+
+
+########## WORKFLOWS
+workflows:
+  firewall-force-workflow:
+    jobs:
+
+      - scan-git-guardian:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+
+      - ejecutando-linter:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - scan-git-guardian
+
+      - ejecutando-tests-unitarios:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - ejecutando-linter
+
+      - actualizando-helm-chart:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - ejecutando-tests-unitarios
+
+      - construyendo-publicando-imagen-dockerhub:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - actualizando-helm-chart
+
+      - desplegando-app-en-cluster-pre:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - construyendo-publicando-imagen-dockerhub
+
+      - desplegando-app-en-vm-pro:
+          context: Keepcoding
+          filters:
+            branches:
+              only:
+                - main

@@ -1,0 +1,29 @@
+{
+    "name": "firewallforce/kc-web-app-php",
+    "description": "Aplicación para el proyecto final Devops de Keepcoding Academy",
+    "type": "library",
+    "keywords": ["keepcoding", "bootcamp", "devops"],
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "firewallforce\\KcBaseApp\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Firewall Force Team",
+            "email": "firewallforce@gmail.com",
+            "role": "Developer"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "promphp/prometheus_client_php": "dev-main"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/FirewallForce/kc-web-app-php.git"
+        }
+    ]
+}

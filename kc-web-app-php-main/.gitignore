@@ -1,0 +1,10 @@
+# Este proyecto esta realizado con fines educativos.
+# Tiene como objetivo cumplir con el proyecto final
+# propuesto por Keepcoding
+#
+# Copyright (c) 2024-present FIREWALL FORCE <firewallforce@gmail.com>
+#
+# @author Firewll Force Team <firewallforce@gmail.com>
+
+/composer.lock
+/vendor

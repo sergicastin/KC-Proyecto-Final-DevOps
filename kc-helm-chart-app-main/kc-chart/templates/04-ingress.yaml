@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kc-ingress
+  namespace: keepcoding
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/validate-webhook: "false"
+spec:
+  ingressClassName: nginx
+  defaultBackend:
+    service:
+      name: kc-service
+      port:
+        number: 80
+  rules:
+  - host: yotkt.com
+    http:
+      paths:
+
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kc-service
+            port:
+              number: 80
+
+      - path: /metrics
+        pathType: Prefix
+        backend:
+          service:
+            name: kc-service
+            port:
+              number: 80

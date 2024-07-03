@@ -1,0 +1,22 @@
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: kc-app
+#   namespace: keepcoding
+#   labels:
+#     app: kc-app
+# spec:
+#   replicas: 4
+#   selector:
+#     matchLabels:
+#       app: kc-app
+#   template:
+#     metadata:
+#       labels:
+#         app: kc-app
+#     spec:
+#       containers:
+#       - name: kc-app-container
+#         image: jhoncytech/kc-final-project-app:v1.0.55
+#         ports:
+#         - containerPort: 80
